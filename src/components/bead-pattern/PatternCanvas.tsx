@@ -18,7 +18,7 @@ export default function PatternCanvas({
           <div className="w-16 h-16 border border-gray-200 flex items-center justify-center opacity-50">
             <ImageIcon className="w-6 h-6" />
           </div>
-          <p className="font-mono text-sm uppercase tracking-widest">Waiting for input</p>
+          <p className="font-mono text-sm tracking-widest">等待上传图片</p>
         </div>
       ) : (
         <div className="w-fit h-fit m-auto">
@@ -34,7 +34,7 @@ export default function PatternCanvas({
 
       {isProcessing && (
         <div className="absolute inset-0 bg-white/80 flex items-center justify-center backdrop-blur-sm">
-          <div className="font-mono text-[#1F4BFF] font-bold animate-pulse">PROCESSING...</div>
+          <div className="font-mono text-[#1F4BFF] font-bold animate-pulse">处理中...</div>
         </div>
       )}
     </div>

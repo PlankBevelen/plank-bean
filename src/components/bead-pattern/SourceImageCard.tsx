@@ -17,7 +17,7 @@ export default function SourceImageCard({
     <div className="bg-white border border-gray-200 p-6 rounded-none">
       <div className="flex items-center gap-2 mb-4 border-b border-gray-100 pb-3">
         <ImageIcon className="w-5 h-5 text-[#1F4BFF]" />
-        <h2 className="text-lg font-bold">Source Image</h2>
+        <h2 className="text-lg font-bold">原图</h2>
       </div>
 
       {!imageSrc ? (
@@ -29,15 +29,15 @@ export default function SourceImageCard({
             <UploadIcon className="w-5 h-5" />
           </div>
           <div className="text-center">
-            <p className="font-medium text-sm">Click to upload image</p>
-            <p className="text-xs text-gray-500 mt-1">PNG, JPG up to 5MB</p>
+            <p className="font-medium text-sm">点击上传图片</p>
+            <p className="text-xs text-gray-500 mt-1">支持 PNG、JPG，大小不超过 5MB</p>
           </div>
         </div>
       ) : (
         <div className="relative group">
           <img
             src={imageSrc}
-            alt="Source"
+            alt="原图预览"
             className="w-full h-auto max-h-48 object-contain bg-gray-50 border border-gray-200"
           />
           <button

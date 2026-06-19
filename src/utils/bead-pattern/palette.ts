@@ -240,35 +240,10 @@ const perlerBeans: BeadColor[] = [
   { hex: '#A0A0A0', name: 'M15瓦灰色', id: 'M15' },
 ]
 
-const perlerPearl: BeadColor[] = [
-  { hex: '#F8F8F8', name: 'P1珠光白', id: 'P1' },
-  { hex: '#FFD700', name: 'P2珠光金', id: 'P2' },
-  { hex: '#D8D8D8', name: 'P3珠光银', id: 'P3' },
-  { hex: '#FFB8C8', name: 'P4珠光粉', id: 'P4' },
-  { hex: '#80C8FF', name: 'P5珠光蓝', id: 'P5' },
-  { hex: '#96E0B8', name: 'P6珠光绿', id: 'P6' },
-  { hex: '#C8B0E6', name: 'P7珠光紫', id: 'P7' },
-  { hex: '#FF7070', name: 'P8珠光红', id: 'P8' },
-]
-
-const perlerFluo: BeadColor[] = [
-  { hex: '#FFFF44', name: 'Q1荧光黄', id: 'Q1' },
-  { hex: '#FFAA33', name: 'Q2荧光橙', id: 'Q2' },
-  { hex: '#FF66BB', name: 'Q3荧光粉', id: 'Q3' },
-  { hex: '#77FF77', name: 'Q4荧光绿', id: 'Q4' },
-  { hex: '#44DDFF', name: 'Q5荧光蓝', id: 'Q5' },
-]
-
-const perlerGlow: BeadColor[] = [
-  { hex: '#E8FFE8', name: 'R1夜光白', id: 'R1' },
-  { hex: '#B8FFB8', name: 'R2夜光绿', id: 'R2' },
-  { hex: '#B8E8FF', name: 'R3夜光蓝', id: 'R3' },
-  { hex: '#FFC8E0', name: 'R4夜光粉', id: 'R4' },
+export const BASIC_BEAD_PALETTE: BeadColor[] = [
+  ...perlerBeans,
 ]
 
 export const BEAD_PALETTE: BeadColor[] = [
-  ...perlerBeans,
-  ...perlerPearl,
-  ...perlerFluo,
-  ...perlerGlow,
+  ...BASIC_BEAD_PALETTE,
 ]
