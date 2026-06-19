@@ -9,6 +9,7 @@ export type PatternExportFormat = 'png' | 'jpeg' | 'webp'
 
 // 处理模式：auto = 推荐模式（全自动），manual = 手动微调
 export type PatternMode = 'auto' | 'manual'
+export type DetailProtectionLevel = 'low' | 'medium' | 'high'
 
 export type PatternProcessingOptions = {
   mode: PatternMode
@@ -16,6 +17,9 @@ export type PatternProcessingOptions = {
   autoRecommendColorCount: boolean
   denoise: boolean
   mergeSimilarColors: boolean
+  preserveDetails: boolean
+  cleanRareColors: boolean
+  detailProtectionLevel: DetailProtectionLevel
 }
 
 export type ShoppingListItem = {

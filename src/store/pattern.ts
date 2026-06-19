@@ -8,6 +8,7 @@ import type {
 } from '../types'
 import {
   DEFAULT_PATTERN_PROCESSING_OPTIONS,
+  normalizePatternProcessingOptions,
   updatePatternCellColor,
 } from '../utils'
 import {
@@ -60,7 +61,7 @@ const initialState: PatternStoreState = {
   hasHydrated: false,
   imageSrc: null,
   gridSize: 48,
-  processingOptions: DEFAULT_PATTERN_PROCESSING_OPTIONS,
+  processingOptions: normalizePatternProcessingOptions(DEFAULT_PATTERN_PROCESSING_OPTIONS),
   pattern: null,
   isProcessing: false,
   isFullscreen: false,
@@ -99,10 +100,10 @@ export const usePatternStore = create<PatternStore>()(
       },
       updateProcessingOptions(patch) {
         set((currentState) => ({
-          processingOptions: {
+          processingOptions: normalizePatternProcessingOptions({
             ...currentState.processingOptions,
             ...patch,
-          },
+          }),
         }))
       },
       setPattern(pattern) {
@@ -153,6 +154,14 @@ export const usePatternStore = create<PatternStore>()(
     {
       name: PERSIST_KEY,
       storage: createJSONStorage(() => patternStorage),
+      merge: (persistedState, currentState) => {
+        const typedState = persistedState as Partial<PatternStoreState>
+        return {
+          ...currentState,
+          ...typedState,
+          processingOptions: normalizePatternProcessingOptions(typedState.processingOptions),
+        }
+      },
       partialize: (currentState): PersistedPatternStore => ({
         imageSrc: currentState.imageSrc,
         gridSize: currentState.gridSize,

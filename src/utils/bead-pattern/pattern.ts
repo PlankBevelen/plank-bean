@@ -16,6 +16,8 @@ type PixelSample = {
   g: number
   b: number
   lab: Lab
+  x: number
+  y: number
 }
 
 type ClusterCenter = {
@@ -23,6 +25,23 @@ type ClusterCenter = {
   g: number
   b: number
   lab: Lab
+  x: number
+  y: number
+}
+
+type DetailTuning = {
+  blurPasses: number
+  opaqueThreshold: number
+  highlightVoteRatio: number
+  highlightMinContrast: number
+  highlightMinBrightnessDelta: number
+  smoothingThresholdBias: number
+  smoothingProtectionContrast: number
+  smoothingProtectionBrightnessDelta: number
+  rareColorRatio: number
+  minSpatialArea: number
+  rareProtectionContrast: number
+  rareProtectionMaxArea: number
 }
 
 export const DEFAULT_PATTERN_PROCESSING_OPTIONS: PatternProcessingOptions = {
@@ -31,13 +50,18 @@ export const DEFAULT_PATTERN_PROCESSING_OPTIONS: PatternProcessingOptions = {
   autoRecommendColorCount: true,
   denoise: true,
   mergeSimilarColors: true,
+  preserveDetails: true,
+  cleanRareColors: false,
+  detailProtectionLevel: 'high',
 }
 
 const WHITE = BASIC_BEAD_PALETTE[0]
 const PALETTE_BY_ID = new Map(BEAD_PALETTE.map((color) => [color.id, color]))
 export const BEAD_DISPLAY_SIZE = 28
-const AUTO_COLOR_COUNT_MAX = 12
+const AUTO_COLOR_COUNT_MAX = 16
 const SIMILAR_COLOR_THRESHOLD = 5
+const SPATIAL_CLUSTER_WEIGHT = 0.03
+const COLOR_COUNT_PENALTY = 0.035
 const EXPORT_MIME_TYPE: Record<PatternExportFormat, string> = {
   png: 'image/png',
   jpeg: 'image/jpeg',
@@ -50,12 +74,13 @@ const MAX_GRID = 72
 const DENSITY_LOW = 0.04
 const DENSITY_HIGH = 0.40
 
-const SUPERSAMPLE = 3
+const SUPERSAMPLE = 4
 
 // 描边像素级判定（独立通道，不参与彩色聚类，保持细线不糊）
-const OUTLINE_MAX_BRIGHTNESS = 70
-const OUTLINE_MAX_CHROMA = 42
-const OUTLINE_FORCE_BRIGHTNESS = 48
+const OUTLINE_MAX_BRIGHTNESS = 58
+const OUTLINE_MAX_CHROMA = 26
+const OUTLINE_FORCE_BRIGHTNESS = 28
+const OUTLINE_NEUTRAL_DISTANCE = 8.5
 
 // 暗 + 低彩度只 snap 中性色
 const NEUTRAL_LOCK_BRIGHTNESS = 95
@@ -65,14 +90,67 @@ const NEUTRAL_PALETTE_CHROMA = 30
 // 强制清杂色：占比低于此阈值的色号并到最接近的保留色（仅推荐/合并模式）
 const RARE_COLOR_RATIO = 0.025
 
+// 空间感知：稀有色若存在 ≥ 此面积的连通块，视为“有意义的区域细节”，不合并
+const MIN_SPATIAL_AREA = 3
+
 const OUTLINE_COLOR: BeadColor =
   BASIC_BEAD_PALETTE.find((c) => c.id === 'H9') ??
   [...BASIC_BEAD_PALETTE].sort((a, b) => brightnessOfHex(a.hex) - brightnessOfHex(b.hex))[0]
+
+const OUTLINE_REFERENCE_COLORS = ['H9', 'H23', 'H13', 'H8']
+  .map((id) => BASIC_BEAD_PALETTE.find((color) => color.id === id))
+  .filter((color): color is BeadColor => Boolean(color))
+const OUTLINE_REFERENCE_LABS = OUTLINE_REFERENCE_COLORS.map((color) => hexToLab(color.hex))
 
 const NEUTRAL_PALETTE: BeadColor[] = BASIC_BEAD_PALETTE.filter((c) => {
   const [r, g, b] = hexToRgb(c.hex)
   return (Math.max(r, g, b) - Math.min(r, g, b)) < NEUTRAL_PALETTE_CHROMA
 })
+
+const DETAIL_TUNING: Record<PatternProcessingOptions['detailProtectionLevel'], DetailTuning> = {
+  low: {
+    blurPasses: 1,
+    opaqueThreshold: 0.5,
+    highlightVoteRatio: 0.95,
+    highlightMinContrast: 24,
+    highlightMinBrightnessDelta: 28,
+    smoothingThresholdBias: -1,
+    smoothingProtectionContrast: 20,
+    smoothingProtectionBrightnessDelta: 24,
+    rareColorRatio: RARE_COLOR_RATIO,
+    minSpatialArea: MIN_SPATIAL_AREA,
+    rareProtectionContrast: 18,
+    rareProtectionMaxArea: 1,
+  },
+  medium: {
+    blurPasses: 0,
+    opaqueThreshold: 0.4,
+    highlightVoteRatio: 0.75,
+    highlightMinContrast: 18,
+    highlightMinBrightnessDelta: 18,
+    smoothingThresholdBias: 0,
+    smoothingProtectionContrast: 14,
+    smoothingProtectionBrightnessDelta: 14,
+    rareColorRatio: 0.018,
+    minSpatialArea: 2,
+    rareProtectionContrast: 14,
+    rareProtectionMaxArea: 2,
+  },
+  high: {
+    blurPasses: 0,
+    opaqueThreshold: 0.34,
+    highlightVoteRatio: 0.6,
+    highlightMinContrast: 14,
+    highlightMinBrightnessDelta: 12,
+    smoothingThresholdBias: 1,
+    smoothingProtectionContrast: 10,
+    smoothingProtectionBrightnessDelta: 10,
+    rareColorRatio: 0.012,
+    minSpatialArea: 2,
+    rareProtectionContrast: 10,
+    rareProtectionMaxArea: 2,
+  },
+}
 
 function brightnessOfHex(hex: string) {
   const [r, g, b] = hexToRgb(hex)
@@ -84,12 +162,104 @@ function brightnessOf(r: number, g: number, b: number) {
 function chromaOf(r: number, g: number, b: number) {
   return Math.max(r, g, b) - Math.min(r, g, b)
 }
+
+function clampDetailProtectionLevel(level: PatternProcessingOptions['detailProtectionLevel'] | undefined) {
+  if (level === 'low' || level === 'medium' || level === 'high') {
+    return level
+  }
+  return DEFAULT_PATTERN_PROCESSING_OPTIONS.detailProtectionLevel
+}
+
+export function normalizePatternProcessingOptions(
+  options: Partial<PatternProcessingOptions> = {},
+): PatternProcessingOptions {
+  return {
+    ...DEFAULT_PATTERN_PROCESSING_OPTIONS,
+    ...options,
+    preserveDetails: options.preserveDetails ?? DEFAULT_PATTERN_PROCESSING_OPTIONS.preserveDetails,
+    cleanRareColors: options.cleanRareColors ?? DEFAULT_PATTERN_PROCESSING_OPTIONS.cleanRareColors,
+    detailProtectionLevel: clampDetailProtectionLevel(options.detailProtectionLevel),
+  }
+}
+
+function getDetailTuning(options: PatternProcessingOptions): DetailTuning {
+  const base = DETAIL_TUNING[options.detailProtectionLevel]
+  if (options.preserveDetails) {
+    return base
+  }
+
+  return {
+    ...DETAIL_TUNING.low,
+    blurPasses: Math.max(1, DETAIL_TUNING.low.blurPasses),
+    opaqueThreshold: 0.5,
+    highlightVoteRatio: 1,
+    smoothingThresholdBias: -1,
+    rareColorRatio: RARE_COLOR_RATIO,
+    minSpatialArea: MIN_SPATIAL_AREA,
+    rareProtectionContrast: Number.POSITIVE_INFINITY,
+    rareProtectionMaxArea: 0,
+  }
+}
+
+function minDeltaEToOutline(r: number, g: number, b: number) {
+  const sourceLab = rgbToLab([r, g, b])
+  let best = Number.POSITIVE_INFINITY
+  for (const outlineLab of OUTLINE_REFERENCE_LABS) {
+    best = Math.min(best, deltaE(sourceLab, outlineLab))
+  }
+  return best
+}
+
+function colorDistanceById(leftId: string, rightId: string) {
+  const left = PALETTE_BY_ID.get(leftId)
+  const right = PALETTE_BY_ID.get(rightId)
+  if (!left || !right) {
+    return 0
+  }
+  return deltaE(hexToLab(left.hex), hexToLab(right.hex))
+}
+/* ------------------------------------------------------------------ *
+ * 3x3 盒式模糊：抑制 JPEG 伪影与传感器噪点，避免被误判为细节。
+ * 仅用于降采样画布，不影响原图。
+ * ------------------------------------------------------------------ */
+function blurCanvas(ctx: CanvasRenderingContext2D, w: number, h: number, passes = 1) {
+  if (w < 3 || h < 3 || passes < 1) {
+    return
+  }
+
+  for (let pass = 0; pass < passes; pass += 1) {
+    const imageData = ctx.getImageData(0, 0, w, h)
+    const src = new Uint8ClampedArray(imageData.data)
+    for (let y = 1; y < h - 1; y += 1) {
+      for (let x = 1; x < w - 1; x += 1) {
+        const idx = (y * w + x) * 4
+        for (let c = 0; c < 3; c += 1) {
+          let sum = 0
+          for (let dy = -1; dy <= 1; dy += 1) {
+            for (let dx = -1; dx <= 1; dx += 1) {
+              sum += src[((y + dy) * w + (x + dx)) * 4 + c]
+            }
+          }
+          imageData.data[idx + c] = Math.round(sum / 9)
+        }
+      }
+    }
+    ctx.putImageData(imageData, 0, 0)
+  }
+}
+
 function isOutlinePixel(r: number, g: number, b: number) {
   const brightness = brightnessOf(r, g, b)
-  if (brightness <= OUTLINE_FORCE_BRIGHTNESS) {
-    return true
+  const chroma = chromaOf(r, g, b)
+  if (brightness > OUTLINE_MAX_BRIGHTNESS || chroma > OUTLINE_MAX_CHROMA) {
+    return false
   }
-  return brightness <= OUTLINE_MAX_BRIGHTNESS && chromaOf(r, g, b) <= OUTLINE_MAX_CHROMA
+
+  const neutralDistance = minDeltaEToOutline(r, g, b)
+  if (brightness <= OUTLINE_FORCE_BRIGHTNESS) {
+    return neutralDistance <= OUTLINE_NEUTRAL_DISTANCE + 1.5
+  }
+  return neutralDistance <= OUTLINE_NEUTRAL_DISTANCE
 }
 function paletteForColor(r: number, g: number, b: number): BeadColor[] {
   if (brightnessOf(r, g, b) < NEUTRAL_LOCK_BRIGHTNESS && chromaOf(r, g, b) < NEUTRAL_LOCK_CHROMA) {
@@ -176,6 +346,12 @@ function distanceSquared(color1: Lab, color2: Lab) {
   )
 }
 
+function clusterDistance(pixel: PixelSample, center: ClusterCenter) {
+  const colorDistance = distanceSquared(pixel.lab, center.lab)
+  const spatialDistance = ((pixel.x - center.x) ** 2) + ((pixel.y - center.y) ** 2)
+  return colorDistance + (SPATIAL_CLUSTER_WEIGHT * spatialDistance)
+}
+
 /* ------------------------------------------------------------------ *
  * 推荐网格尺寸
  * ------------------------------------------------------------------ */
@@ -217,9 +393,15 @@ function recommendGridSize(image: HTMLImageElement) {
 }
 
 /* ------------------------------------------------------------------ *
- * 降采样 + 每格众数采样
+ * 降采样 + 每格主色采样
  * ------------------------------------------------------------------ */
-function sampleGrid(image: HTMLImageElement, width: number, height: number) {
+function sampleGrid(
+  image: HTMLImageElement,
+  width: number,
+  height: number,
+  options: PatternProcessingOptions,
+) {
+  const tuning = getDetailTuning(options)
   const superW = width * SUPERSAMPLE
   const superH = height * SUPERSAMPLE
   const canvas = document.createElement('canvas')
@@ -232,6 +414,7 @@ function sampleGrid(image: HTMLImageElement, width: number, height: number) {
   ctx.imageSmoothingEnabled = true
   ctx.imageSmoothingQuality = 'high'
   ctx.drawImage(image, 0, 0, superW, superH)
+  blurCanvas(ctx, superW, superH, tuning.blurPasses)
   const { data } = ctx.getImageData(0, 0, superW, superH)
 
   const cells: Array<PixelSample | null> = new Array(width * height).fill(null)
@@ -264,26 +447,63 @@ function sampleGrid(image: HTMLImageElement, width: number, height: number) {
           }
         }
       }
-      if (opaque < (SUPERSAMPLE * SUPERSAMPLE) / 2) {
+      if (opaque < Math.ceil((SUPERSAMPLE * SUPERSAMPLE) * tuning.opaqueThreshold)) {
         cells[(gy * width) + gx] = null
         continue
       }
-      let best: { count: number, r: number, g: number, b: number, outline: number } | null = null
-      for (const entry of bucket.values()) {
-        const weight = entry.count + (entry.outline ? 0.5 : 0)
-        const bestWeight = best ? best.count + (best.outline ? 0.5 : 0) : -1
-        if (weight > bestWeight) {
-          best = entry
-        }
-      }
+      const entries = Array.from(bucket.values())
+      entries.sort((left, right) => {
+        const leftWeight = left.count + (left.outline ? 0.25 : 0)
+        const rightWeight = right.count + (right.outline ? 0.25 : 0)
+        return rightWeight - leftWeight
+      })
+
+      let best = entries[0] ?? null
+      const runnerUp = entries[1] ?? null
       if (!best) {
         cells[(gy * width) + gx] = null
         continue
       }
+      if (options.preserveDetails && runnerUp && !best.outline && !runnerUp.outline) {
+        const bestBrightness = brightnessOf(best.r / best.count, best.g / best.count, best.b / best.count)
+        const runnerUpBrightness = brightnessOf(
+          runnerUp.r / runnerUp.count,
+          runnerUp.g / runnerUp.count,
+          runnerUp.b / runnerUp.count,
+        )
+        const contrast = deltaE(
+          rgbToLab([
+            Math.round(best.r / best.count),
+            Math.round(best.g / best.count),
+            Math.round(best.b / best.count),
+          ]),
+          rgbToLab([
+            Math.round(runnerUp.r / runnerUp.count),
+            Math.round(runnerUp.g / runnerUp.count),
+            Math.round(runnerUp.b / runnerUp.count),
+          ]),
+        )
+
+        const isRunnerUpHighlight =
+          runnerUp.count >= Math.max(1, Math.ceil(best.count * tuning.highlightVoteRatio)) &&
+          runnerUpBrightness - bestBrightness >= tuning.highlightMinBrightnessDelta &&
+          contrast >= tuning.highlightMinContrast
+
+        if (isRunnerUpHighlight) {
+          best = runnerUp
+        }
+      }
       const r = Math.round(best.r / best.count)
       const g = Math.round(best.g / best.count)
       const b = Math.round(best.b / best.count)
-      cells[(gy * width) + gx] = { r, g, b, lab: rgbToLab([r, g, b]) }
+      cells[(gy * width) + gx] = {
+        r,
+        g,
+        b,
+        lab: rgbToLab([r, g, b]),
+        x: gx,
+        y: gy,
+      }
     }
   }
   return cells
@@ -301,7 +521,7 @@ function pickInitialCenters(pixels: PixelSample[], centerCount: number) {
     for (const pixel of unique) {
       let minDistance = Number.POSITIVE_INFINITY
       for (const center of centers) {
-        minDistance = Math.min(minDistance, distanceSquared(pixel.lab, center.lab))
+        minDistance = Math.min(minDistance, clusterDistance(pixel, center))
       }
       if (minDistance > bestScore) {
         bestScore = minDistance
@@ -320,15 +540,15 @@ function quantizePixels(pixels: PixelSample[], targetColorCount: number) {
   const centerCount = Math.max(1, Math.min(Math.round(targetColorCount), pixels.length))
   let centers = pickInitialCenters(pixels, centerCount)
   const assignments = new Array<number>(pixels.length).fill(0)
-  for (let iteration = 0; iteration < 20; iteration += 1) {
-    const next = centers.map(() => ({ count: 0, r: 0, g: 0, b: 0, l: 0, a: 0, labB: 0 }))
+  for (let iteration = 0; iteration < 30; iteration += 1) {
+    const next = centers.map(() => ({ count: 0, r: 0, g: 0, b: 0, l: 0, a: 0, labB: 0, x: 0, y: 0 }))
     let changed = false
     for (let i = 0; i < pixels.length; i += 1) {
       const pixel = pixels[i]
       let bestIndex = 0
       let bestDistance = Number.POSITIVE_INFINITY
       for (let c = 0; c < centers.length; c += 1) {
-        const distance = distanceSquared(pixel.lab, centers[c].lab)
+        const distance = clusterDistance(pixel, centers[c])
         if (distance < bestDistance) {
           bestDistance = distance
           bestIndex = c
@@ -346,6 +566,8 @@ function quantizePixels(pixels: PixelSample[], targetColorCount: number) {
       bucket.l += pixel.lab.l
       bucket.a += pixel.lab.a
       bucket.labB += pixel.lab.b
+      bucket.x += pixel.x
+      bucket.y += pixel.y
     }
     centers = centers.map((center, index) => {
       const bucket = next[index]
@@ -357,6 +579,8 @@ function quantizePixels(pixels: PixelSample[], targetColorCount: number) {
         g: Math.round(bucket.g / bucket.count),
         b: Math.round(bucket.b / bucket.count),
         lab: { l: bucket.l / bucket.count, a: bucket.a / bucket.count, b: bucket.labB / bucket.count },
+        x: bucket.x / bucket.count,
+        y: bucket.y / bucket.count,
       }
     })
     if (!changed && iteration > 0) {
@@ -392,7 +616,11 @@ function samplePixelsForRecommendation(pixels: PixelSample[], sampleSize = 1500)
   return sampled
 }
 
-function recommendColorCount(pixels: PixelSample[], maxCandidateCount: number) {
+function recommendColorCount(
+  pixels: PixelSample[],
+  maxCandidateCount: number,
+  options: PatternProcessingOptions,
+) {
   const sampled = samplePixelsForRecommendation(pixels)
   const maxCount = Math.max(2, Math.min(maxCandidateCount, sampled.length))
   if (sampled.length < 2 || maxCount <= 2) {
@@ -404,7 +632,7 @@ function recommendColorCount(pixels: PixelSample[], maxCandidateCount: number) {
     errors.push(computeQuantizationError(sampled, assignments, centers))
   }
   const maxError = Math.max(...errors, 1)
-  const penalty = 0.05
+  const penalty = options.preserveDetails ? COLOR_COUNT_PENALTY : COLOR_COUNT_PENALTY + 0.015
   let bestK = 2
   let bestCost = Number.POSITIVE_INFINITY
   for (let i = 0; i < errors.length; i += 1) {
@@ -416,6 +644,151 @@ function recommendColorCount(pixels: PixelSample[], maxCandidateCount: number) {
     }
   }
   return bestK
+}
+
+/* ------------------------------------------------------------------ *
+ * 邻域一致性平滑：消除孤立噪点，保持区域连贯。
+ * 条件：当前格无同色邻居 且 邻域主色出现次数 ≥ 阈值。
+ * 描边色格(H9)不参与翻转，保证细线不糊。
+ * ------------------------------------------------------------------ */
+function neighborhoodSmooth(
+  idGrid: (string | null)[],
+  width: number,
+  height: number,
+  options: PatternProcessingOptions,
+  passes = 1,
+): (string | null)[] {
+  if (width < 2 || height < 2 || passes < 1) {
+    return idGrid
+  }
+  const tuning = getDetailTuning(options)
+  let source = idGrid
+  let result = idGrid
+  for (let pass = 0; pass < passes; pass += 1) {
+    const smoothed = [...source]
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const idx = y * width + x
+        const currentColor = source[idx]
+        if (!currentColor || currentColor === OUTLINE_COLOR.id) {
+          continue
+        }
+        // 收集邻域颜色频次（不含自身）
+        const neighborCounts = new Map<string, number>()
+        let validNeighbors = 0
+        for (let dy = -1; dy <= 1; dy += 1) {
+          for (let dx = -1; dx <= 1; dx += 1) {
+            if (dx === 0 && dy === 0) continue
+            const nx = x + dx
+            const ny = y + dy
+            if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue
+            const nColor = source[ny * width + nx]
+            if (nColor) {
+              validNeighbors += 1
+              neighborCounts.set(nColor, (neighborCounts.get(nColor) ?? 0) + 1)
+            }
+          }
+        }
+        if (validNeighbors === 0) {
+          continue
+        }
+        // 当前色在邻域中出现次数
+        const sameColorCount = neighborCounts.get(currentColor) ?? 0
+        if (sameColorCount > 0) {
+          continue
+        }
+        // 找出邻域主色
+        let bestColor: string | null = null
+        let bestCount = 0
+        for (const [color, count] of neighborCounts) {
+          if (count > bestCount) {
+            bestCount = count
+            bestColor = color
+          }
+        }
+        // 阈值：角落≥2，边缘≥3，内部≥4
+        const baseThreshold = validNeighbors <= 3 ? 2 : validNeighbors <= 5 ? 3 : 4
+        const threshold = Math.max(2, baseThreshold - tuning.smoothingThresholdBias)
+        if (bestColor && options.preserveDetails) {
+          const contrast = colorDistanceById(currentColor, bestColor)
+          const brightnessDelta =
+            brightnessOfHex((PALETTE_BY_ID.get(currentColor) ?? WHITE).hex) -
+            brightnessOfHex((PALETTE_BY_ID.get(bestColor) ?? WHITE).hex)
+          if (
+            contrast >= tuning.smoothingProtectionContrast &&
+            brightnessDelta >= tuning.smoothingProtectionBrightnessDelta
+          ) {
+            continue
+          }
+        }
+        if (bestColor && bestCount >= threshold) {
+          smoothed[idx] = bestColor
+        }
+      }
+    }
+    source = smoothed
+    result = smoothed
+  }
+  return result
+}
+
+/* ------------------------------------------------------------------ *
+ * 连通分量分析：BFS 求每种颜色所有连通块面积。
+ * 用于判断“稀有色”是否形成空间连贯区域。
+ * ------------------------------------------------------------------ */
+function getConnectedComponentAreas(
+  idGrid: (string | null)[],
+  width: number,
+  height: number,
+): Map<string, number[]> {
+  const visited = new Uint8Array(width * height)
+  const areas = new Map<string, number[]>()
+  const dirs = [0, -1, 0, 1, 0] // 4-connected: up, right, down, left
+
+  for (let startY = 0; startY < height; startY += 1) {
+    for (let startX = 0; startX < width; startX += 1) {
+      const startIdx = startY * width + startX
+      if (visited[startIdx]) continue
+      const color = idGrid[startIdx]
+      if (!color) {
+        visited[startIdx] = 1
+        continue
+      }
+      // BFS
+      const queue: number[] = [startIdx]
+      visited[startIdx] = 1
+      let area = 0
+      while (queue.length > 0) {
+        const idx = queue.pop()!
+        area += 1
+        const cx = idx % width
+        const cy = Math.floor(idx / width)
+        for (let d = 0; d < 4; d += 1) {
+          const nx = cx + dirs[d]
+          const ny = cy + dirs[d + 1]
+          if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue
+          const nIdx = ny * width + nx
+          if (visited[nIdx]) continue
+          if (idGrid[nIdx] !== color) continue
+          visited[nIdx] = 1
+          queue.push(nIdx)
+        }
+      }
+      if (area > 0) {
+        const list = areas.get(color)
+        if (list) {
+          list.push(area)
+        } else {
+          areas.set(color, [area])
+        }
+      }
+    }
+  }
+  // 每个颜色的连通块面积按降序排列
+  for (const list of areas.values()) {
+    list.sort((a, b) => b - a)
+  }
+  return areas
 }
 
 /* ------------------------------------------------------------------ *
@@ -446,9 +819,17 @@ function buildColorAliases(counts: Record<string, number>, palette: BeadColor[],
 
 /* ------------------------------------------------------------------ *
  * 强制清杂色：把占比 < RARE_COLOR_RATIO 的彩色色号并到最接近的高频色号。
- * 描边色(H9)永远保留。这是“杂色少”的关键一步。
+ * 描边色(H9)永远保留。
+ * 空间感知：若稀有色在某处形成 ≥ MIN_SPATIAL_AREA 的连通块，
+ * 说明它是“有意义的区域细节”（如眼睛高光、鼻尖），予以保留。
  * ------------------------------------------------------------------ */
-function mergeRareColors(ids: Array<string | null>) {
+function mergeRareColors(
+  ids: Array<string | null>,
+  width: number,
+  height: number,
+  options: PatternProcessingOptions,
+) {
+  const tuning = getDetailTuning(options)
   const counts = new Map<string, number>()
   let total = 0
   for (const id of ids) {
@@ -464,12 +845,37 @@ function mergeRareColors(ids: Array<string | null>) {
   const paletteById = new Map(BASIC_BEAD_PALETTE.map((c) => [c.id, c]))
   const keep: string[] = []
   const rare: string[] = []
+
+  // 先计算连通分量，用于空间感知判断
+  const componentAreas = getConnectedComponentAreas(ids, width, height)
+
   for (const [id, count] of counts.entries()) {
-    if (id === OUTLINE_COLOR.id || count / total >= RARE_COLOR_RATIO) {
+    if (id === OUTLINE_COLOR.id) {
       keep.push(id)
-    } else {
-      rare.push(id)
+      continue
     }
+    const ratio = count / total
+    if (ratio >= tuning.rareColorRatio) {
+      keep.push(id)
+      continue
+    }
+    // 空间感知：检查该色是否形成有意义的连贯区域
+    const areas = componentAreas.get(id)
+    const largestArea = areas?.[0] ?? 0
+    if (largestArea >= tuning.minSpatialArea) {
+      keep.push(id)
+      continue
+    }
+    if (options.preserveDetails && largestArea > 0 && largestArea <= tuning.rareProtectionMaxArea) {
+      const nearestKeptDistance = keep.reduce((best, keptId) => (
+        Math.min(best, colorDistanceById(id, keptId))
+      ), Number.POSITIVE_INFINITY)
+      if (nearestKeptDistance >= tuning.rareProtectionContrast) {
+        keep.push(id)
+        continue
+      }
+    }
+    rare.push(id)
   }
   if (rare.length === 0 || keep.length === 0) {
     return ids
@@ -513,14 +919,15 @@ export async function processImageToPattern(
   usePalette: boolean,
   options: PatternProcessingOptions = DEFAULT_PATTERN_PROCESSING_OPTIONS,
 ): Promise<ProcessedPattern> {
+  const resolvedOptions = normalizePatternProcessingOptions(options)
   const image = await loadImage(imageSrc)
-  const isAuto = options.mode === 'auto'
+  const isAuto = resolvedOptions.mode === 'auto'
 
   const gridSize = isAuto ? recommendGridSize(image) : requestedGridSize
   const { width, height } = getPatternDimensions(image, gridSize)
   const [whiteR, whiteG, whiteB] = hexToRgb(WHITE.hex)
 
-  const sampled = sampleGrid(image, width, height)
+  const sampled = sampleGrid(image, width, height, resolvedOptions)
 
   if (!usePalette) {
     const cells: ProcessedPattern['cells'] = sampled.map((cell) =>
@@ -554,10 +961,10 @@ export async function processImageToPattern(
   }
 
   // 彩色聚类定代表色
-  const useAutoColorCount = isAuto || options.autoRecommendColorCount
+  const useAutoColorCount = isAuto || resolvedOptions.autoRecommendColorCount
   const colorCount = useAutoColorCount
-    ? recommendColorCount(colorPixels, AUTO_COLOR_COUNT_MAX)
-    : Math.max(2, Math.min(AUTO_COLOR_COUNT_MAX, Math.round(options.targetColorCount)))
+    ? recommendColorCount(colorPixels, AUTO_COLOR_COUNT_MAX, resolvedOptions)
+    : Math.max(2, Math.min(AUTO_COLOR_COUNT_MAX, Math.round(resolvedOptions.targetColorCount)))
   const { assignments, centers } = quantizePixels(colorPixels, colorCount)
 
   // 每格用所属聚类中心的量化色，逐格 snap（暗色锁中性）
@@ -568,13 +975,16 @@ export async function processImageToPattern(
     idGrid[cellIndex] = closestColor(src.r, src.g, src.b, sub).id
   }
 
-  // 注：原“保边去杂色”(removeIsolatedNoise) 已移除——它会把眼睛高光、
-  // 鼻尖等本就孤立的小细节误判为噪点抹掉，造成糊。杂色由下面的
-  // ΔE 合并 + 强制清杂色处理，不需要它。
+  // 邻域一致性平滑：消孤立噪点，保留描边色。
+  // auto 模式默认开启；manual 模式由 denoise 开关控制。
   let processedIds = idGrid
+  const shouldDenoise = resolvedOptions.denoise
+  if (shouldDenoise) {
+    processedIds = neighborhoodSmooth(processedIds, width, height, resolvedOptions)
+  }
 
   // ΔE 合并相近色号
-  const mergeSimilar = isAuto ? true : options.mergeSimilarColors
+  const mergeSimilar = resolvedOptions.mergeSimilarColors
   if (mergeSimilar) {
     const rawCounts: Record<string, number> = {}
     for (const id of processedIds) {
@@ -589,8 +999,8 @@ export async function processImageToPattern(
   }
 
   // 强制清杂色：并掉低频色号
-  if (mergeSimilar) {
-    processedIds = mergeRareColors(processedIds)
+  if (resolvedOptions.cleanRareColors) {
+    processedIds = mergeRareColors(processedIds, width, height, resolvedOptions)
   }
 
   // 输出
@@ -710,4 +1120,11 @@ export async function exportPatternImage(
   } finally {
     window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 0)
   }
+}
+
+export const __PATTERN_TESTING__ = {
+  isOutlinePixel,
+  mergeRareColors,
+  neighborhoodSmooth,
+  normalizePatternProcessingOptions,
 }
