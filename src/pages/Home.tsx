@@ -1,39 +1,39 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { useOutletContext } from 'react-router-dom'
+import { useCallback, useEffect, useRef } from 'react'
 import {
   ParametersCard,
   PatternCanvas,
   ShoppingListCard,
   SourceImageCard,
 } from '../components/bead-pattern'
-import type {
-  LayoutExportContext,
-  PatternProcessingOptions,
-  ProcessedPattern,
-} from '../types'
+import { usePatternStore } from '../store'
 import {
   BEAD_DISPLAY_SIZE,
-  DEFAULT_PATTERN_PROCESSING_OPTIONS,
   drawPatternToCanvas,
   processImageToPattern,
-  updatePatternCellColor,
 } from '../utils'
 
 export default function Home() {
-  const { setCanExport, setExportAction } = useOutletContext<LayoutExportContext>()
-  const [imageSrc, setImageSrc] = useState<string | null>(null)
-  const [gridSize, setGridSize] = useState(48)
-  const [processingOptions, setProcessingOptions] = useState<PatternProcessingOptions>(
-    DEFAULT_PATTERN_PROCESSING_OPTIONS,
-  )
-  const [pattern, setPattern] = useState<ProcessedPattern | null>(null)
-  const [isProcessing, setIsProcessing] = useState(false)
-  const [isFullscreen, setIsFullscreen] = useState(false)
-  const [isEditMode, setIsEditMode] = useState(false)
-  const [selectedColorId, setSelectedColorId] = useState<string | null>(null)
-
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const hasHydrated = usePatternStore((store) => store.hasHydrated)
+  const imageSrc = usePatternStore((store) => store.imageSrc)
+  const gridSize = usePatternStore((store) => store.gridSize)
+  const processingOptions = usePatternStore((store) => store.processingOptions)
+  const pattern = usePatternStore((store) => store.pattern)
+  const isProcessing = usePatternStore((store) => store.isProcessing)
+  const isFullscreen = usePatternStore((store) => store.isFullscreen)
+  const isEditMode = usePatternStore((store) => store.isEditMode)
+  const selectedColorId = usePatternStore((store) => store.selectedColorId)
+  const setImageSrc = usePatternStore((store) => store.setImageSrc)
+  const setGridSize = usePatternStore((store) => store.setGridSize)
+  const updateProcessingOptions = usePatternStore((store) => store.updateProcessingOptions)
+  const setPattern = usePatternStore((store) => store.setPattern)
+  const updatePatternCell = usePatternStore((store) => store.updatePatternCell)
+  const setIsProcessing = usePatternStore((store) => store.setIsProcessing)
+  const setIsFullscreen = usePatternStore((store) => store.setIsFullscreen)
+  const setIsEditMode = usePatternStore((store) => store.setIsEditMode)
+  const setSelectedColorId = usePatternStore((store) => store.setSelectedColorId)
+  const clearPatternSession = usePatternStore((store) => store.clearPatternSession)
   const shoppingList = pattern?.shoppingList ?? []
   const recommendation = pattern?.recommendation ?? null
   const canEdit = Boolean(pattern && shoppingList.length > 0 && !isProcessing)
@@ -46,6 +46,7 @@ export default function Home() {
     const reader = new FileReader()
     reader.onload = (loadEvent) => {
       setImageSrc(loadEvent.target?.result as string)
+      setPattern(null)
       setIsEditMode(false)
       setSelectedColorId(null)
     }
@@ -53,11 +54,7 @@ export default function Home() {
   }
 
   const clearImage = () => {
-    setImageSrc(null)
-    setPattern(null)
-    setIsFullscreen(false)
-    setIsEditMode(false)
-    setSelectedColorId(null)
+    clearPatternSession()
 
     if (canvasRef.current) {
       const context = canvasRef.current.getContext('2d')
@@ -68,33 +65,11 @@ export default function Home() {
     }
   }
 
-  const exportPattern = useCallback(() => {
-    if (!canvasRef.current || !pattern) {
+  useEffect(() => {
+    if (!hasHydrated) {
       return
     }
-    const link = document.createElement('a')
-    link.download = 'PlankBean-拼豆图纸.png'
-    link.href = canvasRef.current.toDataURL()
-    link.click()
-  }, [pattern])
 
-  const updateProcessingOptions = useCallback((patch: Partial<PatternProcessingOptions>) => {
-    setProcessingOptions((prev) => ({ ...prev, ...patch }))
-  }, [])
-
-  useEffect(() => {
-    setCanExport(shoppingList.length > 0)
-  }, [setCanExport, shoppingList.length])
-
-  useEffect(() => {
-    setExportAction(() => exportPattern)
-    return () => {
-      setExportAction(null)
-      setCanExport(false)
-    }
-  }, [exportPattern, setCanExport, setExportAction])
-
-  useEffect(() => {
     let isCancelled = false
 
     async function syncPattern() {
@@ -116,6 +91,8 @@ export default function Home() {
         if (processingOptions.mode === 'auto' && nextPattern.recommendation.gridSize !== gridSize) {
           setGridSize(nextPattern.recommendation.gridSize)
         }
+      } catch (error) {
+        console.error('生成拼豆图纸失败', error)
       } finally {
         if (!isCancelled) {
           setIsProcessing(false)
@@ -128,7 +105,7 @@ export default function Home() {
     return () => {
       isCancelled = true
     }
-  }, [gridSize, imageSrc, processingOptions])
+  }, [gridSize, hasHydrated, imageSrc, processingOptions, setGridSize, setIsProcessing, setPattern])
 
   useEffect(() => {
     if (!canvasRef.current) {
@@ -142,7 +119,7 @@ export default function Home() {
     }
 
     drawPatternToCanvas(canvasRef.current, pattern, true)
-  }, [pattern, isFullscreen])
+  }, [hasHydrated, isFullscreen, pattern])
 
   useEffect(() => {
     if (isFullscreen) {
@@ -191,27 +168,25 @@ export default function Home() {
     return () => {
       window.removeEventListener('keydown', handleKeyDown)
     }
-  }, [isFullscreen])
+  }, [isFullscreen, setIsFullscreen])
 
   const handleToggleFullscreen = useCallback(() => {
-    setIsFullscreen((prev) => !prev)
-  }, [])
+    setIsFullscreen(!isFullscreen)
+  }, [isFullscreen, setIsFullscreen])
 
   const handleToggleEditMode = useCallback(() => {
     if (!canEdit) {
       return
     }
 
-    setIsEditMode((prev) => {
-      const next = !prev
-      if (!next) {
-        setSelectedColorId(null)
-      } else {
-        setSelectedColorId((current) => current ?? shoppingList[0]?.color.id ?? null)
-      }
-      return next
-    })
-  }, [canEdit, shoppingList])
+    const next = !isEditMode
+    setIsEditMode(next)
+    if (!next) {
+      setSelectedColorId(null)
+      return
+    }
+    setSelectedColorId(selectedColorId ?? shoppingList[0]?.color.id ?? null)
+  }, [canEdit, isEditMode, selectedColorId, setIsEditMode, setSelectedColorId, shoppingList])
 
   const handleCanvasClick = useCallback((event: React.MouseEvent<HTMLCanvasElement>) => {
     if (!canvasRef.current || !pattern || !isEditMode || !selectedColorId) {
@@ -233,10 +208,8 @@ export default function Home() {
     }
 
     const cellIndex = (y * pattern.width) + x
-    setPattern((current) => (
-      current ? updatePatternCellColor(current, cellIndex, selectedColorId) : current
-    ))
-  }, [isEditMode, pattern, selectedColorId])
+    updatePatternCell(cellIndex, selectedColorId)
+  }, [isEditMode, pattern, selectedColorId, updatePatternCell])
 
   if (isFullscreen) {
     return (

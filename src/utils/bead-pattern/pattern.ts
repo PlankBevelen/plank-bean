@@ -1,5 +1,6 @@
 import type {
   BeadColor,
+  PatternExportFormat,
   PatternProcessingOptions,
   PatternRecommendation,
   ProcessedPattern,
@@ -37,6 +38,11 @@ const PALETTE_BY_ID = new Map(BEAD_PALETTE.map((color) => [color.id, color]))
 export const BEAD_DISPLAY_SIZE = 28
 const AUTO_COLOR_COUNT_MAX = 12
 const SIMILAR_COLOR_THRESHOLD = 5
+const EXPORT_MIME_TYPE: Record<PatternExportFormat, string> = {
+  png: 'image/png',
+  jpeg: 'image/jpeg',
+  webp: 'image/webp',
+}
 
 // 推荐网格
 const MIN_GRID = 28
@@ -657,5 +663,51 @@ export function drawPatternToCanvas(canvas: HTMLCanvasElement, pattern: Processe
       context.textBaseline = 'middle'
       context.fillText(colorId, cx, cy + 1)
     }
+  }
+}
+
+export async function exportPatternImage(
+  pattern: ProcessedPattern,
+  format: PatternExportFormat,
+) {
+  if (typeof document === 'undefined') {
+    throw new Error('当前环境不支持导出图纸，请在浏览器中重试。')
+  }
+
+  if (!pattern || pattern.cells.length === 0) {
+    throw new Error('当前没有可导出的图纸数据，请先生成拼豆图纸。')
+  }
+
+  const canvas = document.createElement('canvas')
+  drawPatternToCanvas(canvas, pattern, true)
+
+  const mimeType = EXPORT_MIME_TYPE[format]
+  const quality = format === 'png' ? undefined : 1
+  const blob = await new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob(
+      (result) => {
+        if (!result) {
+          reject(new Error('导出文件生成失败，请稍后重试。'))
+          return
+        }
+        resolve(result)
+      },
+      mimeType,
+      quality,
+    )
+  })
+
+  const extension = format === 'jpeg' ? 'jpg' : format
+  const downloadUrl = URL.createObjectURL(blob)
+  try {
+    const link = document.createElement('a')
+    link.download = `PlankBean-拼豆图纸.${extension}`
+    link.href = downloadUrl
+    link.rel = 'noopener'
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+  } finally {
+    window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 0)
   }
 }

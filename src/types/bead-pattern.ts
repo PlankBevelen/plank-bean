@@ -5,6 +5,7 @@ export type BeadColor = {
 }
 
 export type PatternColorMode = 'basic'
+export type PatternExportFormat = 'png' | 'jpeg' | 'webp'
 
 // 处理模式：auto = 推荐模式（全自动），manual = 手动微调
 export type PatternMode = 'auto' | 'manual'
