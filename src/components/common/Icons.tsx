@@ -80,3 +80,34 @@ export function ListIcon(props: IconProps) {
     </BaseIcon>
   )
 }
+
+export function ExpandIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      <path d="M15 3h6v6" />
+      <path d="M9 21H3v-6" />
+      <path d="M21 3l-7 7" />
+      <path d="M3 21l7-7" />
+    </BaseIcon>
+  )
+}
+
+export function ShrinkIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      <path d="M9 3H3v6" />
+      <path d="M15 21h6v-6" />
+      <path d="M3 3l7 7" />
+      <path d="M21 21l-7-7" />
+    </BaseIcon>
+  )
+}
+
+export function PencilIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      <path d="M12 20h9" />
+      <path d="m16.5 3.5 4 4L7 21l-4 1 1-4Z" />
+    </BaseIcon>
+  )
+}

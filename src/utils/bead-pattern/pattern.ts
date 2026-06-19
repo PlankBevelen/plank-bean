@@ -33,7 +33,8 @@ export const DEFAULT_PATTERN_PROCESSING_OPTIONS: PatternProcessingOptions = {
 }
 
 const WHITE = BASIC_BEAD_PALETTE[0]
-const BEAD_DISPLAY_SIZE = 28
+const PALETTE_BY_ID = new Map(BEAD_PALETTE.map((color) => [color.id, color]))
+export const BEAD_DISPLAY_SIZE = 28
 const AUTO_COLOR_COUNT_MAX = 12
 const SIMILAR_COLOR_THRESHOLD = 5
 
@@ -114,10 +115,51 @@ function getPatternDimensions(image: HTMLImageElement, gridSize: number) {
 function buildShoppingList(counts: Record<string, number>): ShoppingListItem[] {
   return Object.entries(counts)
     .map(([id, count]) => ({
-      color: BEAD_PALETTE.find((item) => item.id === id) ?? WHITE,
+      color: PALETTE_BY_ID.get(id) ?? WHITE,
       count,
     }))
     .sort((a, b) => b.count - a.count)
+}
+
+export function updatePatternCellColor(
+  pattern: ProcessedPattern,
+  cellIndex: number,
+  colorId: string,
+): ProcessedPattern {
+  const color = PALETTE_BY_ID.get(colorId)
+  const currentCell = pattern.cells[cellIndex]
+  if (!color || !currentCell || currentCell.isEmpty || currentCell.colorId === colorId) {
+    return pattern
+  }
+
+  const [r, g, b] = hexToRgb(color.hex)
+  const cells = pattern.cells.map((cell, index) =>
+    index === cellIndex
+      ? {
+          r,
+          g,
+          b,
+          colorId: color.id,
+        }
+      : cell,
+  )
+
+  const counts: Record<string, number> = {}
+  for (const cell of cells) {
+    if (!cell.isEmpty && cell.colorId) {
+      counts[cell.colorId] = (counts[cell.colorId] ?? 0) + 1
+    }
+  }
+
+  return {
+    ...pattern,
+    cells,
+    shoppingList: buildShoppingList(counts),
+    recommendation: {
+      ...pattern.recommendation,
+      colorCount: Object.keys(counts).length,
+    },
+  }
 }
 
 function distanceSquared(color1: Lab, color2: Lab) {
