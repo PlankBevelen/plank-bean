@@ -213,7 +213,7 @@ const perlerBeans: BeadColor[] = [
   { hex: '#E0C8B0', name: 'G11浅木色', id: 'G11' },
   { hex: '#BCA086', name: 'G12原木灰', id: 'G12' },
   { hex: '#806046', name: 'G13深木灰', id: 'G13' },
-  { hex: '#A05840', name: 'G14红棕', id: 'G14' },
+  { hex: '#A0523A', name: 'G14红棕', id: 'G14' },
   { hex: '#8C6050', name: 'G15灰红棕', id: 'G15' },
   { hex: '#734636', name: 'G16暗红棕', id: 'G16' },
   { hex: '#CCAA86', name: 'G17浅胡桃', id: 'G17' },

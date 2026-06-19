@@ -42,6 +42,12 @@ async function createNodeReadableMirror(rootDir: string) {
     await writeFile(targetPath, content, 'utf8')
   }
 
+  await writeFile(
+    path.join(tempDir, 'package.json'),
+    JSON.stringify({ type: 'module' }, null, 2),
+    'utf8',
+  )
+
   return tempDir
 }
 
@@ -66,6 +72,10 @@ type PatternTestingModule = {
     ) => PatternProcessingOptions
   }
   DEFAULT_PATTERN_PROCESSING_OPTIONS: PatternProcessingOptions
+}
+
+type PaletteModule = {
+  BASIC_BEAD_PALETTE: Array<{ id: string, hex: string }>
 }
 
 function withOptions(
@@ -112,25 +122,24 @@ function verifyRareColorProtection(
   testing: PatternTestingModule['__PATTERN_TESTING__'],
   defaults: PatternProcessingOptions,
 ) {
-  const grid = [
-    'H8', 'H8', 'H8',
-    'H8', 'H1', 'H8',
-    'H8', 'H8', 'H8',
-  ]
+  const width = 10
+  const height = 10
+  const grid = new Array<string>(width * height).fill('H8')
+  grid[44] = 'H1'
 
-  const preserved = testing.mergeRareColors(grid, 3, 3, withOptions(testing, defaults, {
+  const preserved = testing.mergeRareColors(grid, width, height, withOptions(testing, defaults, {
     preserveDetails: true,
     detailProtectionLevel: 'high',
     cleanRareColors: true,
   }))
-  assert(preserved[4] === 'H1', '保细节模式下，高对比稀有色应被保留')
+  assert(preserved[44] === 'H1', '保细节模式下，高对比稀有色应被保留')
 
-  const cleaned = testing.mergeRareColors(grid, 3, 3, withOptions(testing, defaults, {
+  const cleaned = testing.mergeRareColors(grid, width, height, withOptions(testing, defaults, {
     preserveDetails: false,
     detailProtectionLevel: 'low',
     cleanRareColors: true,
   }))
-  assert(cleaned[4] === 'H8', '清理模式下，孤立稀有色应被并入主色')
+  assert(cleaned[44] === 'H8', '清理模式下，孤立稀有色应被并入主色')
 }
 
 function verifyDefaultOptions(
@@ -144,17 +153,28 @@ function verifyDefaultOptions(
   assert(defaults.preserveDetails === true, '默认导出配置应与归一化结果一致')
 }
 
+function verifyPaletteUniqueness(palette: PaletteModule['BASIC_BEAD_PALETTE']) {
+  const seen = new Set<string>()
+  for (const color of palette) {
+    assert(!seen.has(color.hex), `色板中存在重复色值: ${color.id} -> ${color.hex}`)
+    seen.add(color.hex)
+  }
+}
+
 async function main() {
   const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
   const tempDir = await createNodeReadableMirror(rootDir)
 
   try {
     const moduleUrl = pathToFileURL(path.join(tempDir, 'src/utils/bead-pattern/pattern.ts')).href
+    const paletteUrl = pathToFileURL(path.join(tempDir, 'src/utils/bead-pattern/palette.ts')).href
     const imported = await import(moduleUrl) as PatternTestingModule
+    const paletteModule = await import(paletteUrl) as PaletteModule
     verifyOutlineDetection(imported.__PATTERN_TESTING__)
     verifyDetailSmoothingProtection(imported.__PATTERN_TESTING__, imported.DEFAULT_PATTERN_PROCESSING_OPTIONS)
     verifyRareColorProtection(imported.__PATTERN_TESTING__, imported.DEFAULT_PATTERN_PROCESSING_OPTIONS)
     verifyDefaultOptions(imported.__PATTERN_TESTING__, imported.DEFAULT_PATTERN_PROCESSING_OPTIONS)
+    verifyPaletteUniqueness(paletteModule.BASIC_BEAD_PALETTE)
     console.log('algorithm verification passed')
   } finally {
     await rm(tempDir, { recursive: true, force: true })

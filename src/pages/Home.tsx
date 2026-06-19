@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
 import {
   ParametersCard,
   PatternCanvas,
@@ -34,9 +34,10 @@ export default function Home() {
   const setIsEditMode = usePatternStore((store) => store.setIsEditMode)
   const setSelectedColorId = usePatternStore((store) => store.setSelectedColorId)
   const clearPatternSession = usePatternStore((store) => store.clearPatternSession)
-  const shoppingList = pattern?.shoppingList ?? []
+  const shoppingList = useMemo(() => pattern?.shoppingList ?? [], [pattern])
   const recommendation = pattern?.recommendation ?? null
   const canEdit = Boolean(pattern && shoppingList.length > 0 && !isProcessing)
+  const requestedGridSize = processingOptions.mode === 'manual' ? gridSize : 0
 
   const handleImageUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
@@ -80,17 +81,12 @@ export default function Home() {
       setIsProcessing(true)
 
       try {
-        const nextPattern = await processImageToPattern(imageSrc, gridSize, true, processingOptions)
+        const nextPattern = await processImageToPattern(imageSrc, requestedGridSize, true, processingOptions)
         if (isCancelled) {
           return
         }
 
         setPattern(nextPattern)
-
-        // 推荐模式：把算法决定的网格写回滑块，方便用户切到手动时从推荐值起调
-        if (processingOptions.mode === 'auto' && nextPattern.recommendation.gridSize !== gridSize) {
-          setGridSize(nextPattern.recommendation.gridSize)
-        }
       } catch (error) {
         console.error('生成拼豆图纸失败', error)
       } finally {
@@ -105,7 +101,18 @@ export default function Home() {
     return () => {
       isCancelled = true
     }
-  }, [gridSize, hasHydrated, imageSrc, processingOptions, setGridSize, setIsProcessing, setPattern])
+  }, [hasHydrated, imageSrc, processingOptions, requestedGridSize, setIsProcessing, setPattern])
+
+  useEffect(() => {
+    if (processingOptions.mode !== 'auto' || !pattern) {
+      return
+    }
+
+    const recommendedGridSize = pattern.recommendation.gridSize
+    if (recommendedGridSize !== gridSize) {
+      setGridSize(recommendedGridSize)
+    }
+  }, [gridSize, pattern, processingOptions.mode, setGridSize])
 
   useEffect(() => {
     if (!canvasRef.current) {
@@ -139,7 +146,7 @@ export default function Home() {
     }
     setIsEditMode(false)
     setSelectedColorId(null)
-  }, [isFullscreen])
+  }, [isFullscreen, setIsEditMode, setSelectedColorId])
 
   useEffect(() => {
     if (!isEditMode) {
@@ -152,7 +159,7 @@ export default function Home() {
     if (!selectedColorId || !shoppingList.some((item) => item.color.id === selectedColorId)) {
       setSelectedColorId(shoppingList[0].color.id)
     }
-  }, [isEditMode, selectedColorId, shoppingList])
+  }, [isEditMode, selectedColorId, setSelectedColorId, shoppingList])
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {

@@ -1,5 +1,5 @@
 import { createBrowserRouter } from 'react-router-dom'
-import lazyLoad from '../components/RouteLoading'
+import lazyLoad from '../components/lazyLoad'
 
 const router = createBrowserRouter([
   {

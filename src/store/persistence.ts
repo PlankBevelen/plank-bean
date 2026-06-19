@@ -30,12 +30,8 @@ export async function readPersistedValue(key: string) {
   }
 
   try {
-    return await new Promise<string | null>(async (resolve, reject) => {
-      const database = await openDatabase().catch(reject)
-      if (!database) {
-        return
-      }
-
+    const database = await openDatabase()
+    return await new Promise<string | null>((resolve, reject) => {
       const transaction = database.transaction(STORE_NAME, 'readonly')
       const store = transaction.objectStore(STORE_NAME)
       const request = store.get(key)
@@ -60,12 +56,8 @@ export async function writePersistedValue(key: string, value: string) {
   }
 
   try {
-    await new Promise<void>(async (resolve, reject) => {
-      const database = await openDatabase().catch(reject)
-      if (!database) {
-        return
-      }
-
+    const database = await openDatabase()
+    await new Promise<void>((resolve, reject) => {
       const transaction = database.transaction(STORE_NAME, 'readwrite')
       const store = transaction.objectStore(STORE_NAME)
       const request = store.put(value, key)
@@ -88,12 +80,8 @@ export async function removePersistedValue(key: string) {
   }
 
   try {
-    await new Promise<void>(async (resolve, reject) => {
-      const database = await openDatabase().catch(reject)
-      if (!database) {
-        return
-      }
-
+    const database = await openDatabase()
+    await new Promise<void>((resolve, reject) => {
       const transaction = database.transaction(STORE_NAME, 'readwrite')
       const store = transaction.objectStore(STORE_NAME)
       const request = store.delete(key)
