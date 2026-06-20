@@ -51,12 +51,6 @@ export type PatternCellEdit = {
   reason: string
 }
 
-export type PatternGridSnapshot = {
-  width: number
-  height: number
-  cells: Array<string | null>
-}
-
 export type PatternSystemRecommendation = {
   gridSize: number
   processingOptions: PatternProcessingOptions

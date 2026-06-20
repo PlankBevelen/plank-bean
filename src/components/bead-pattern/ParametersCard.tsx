@@ -79,7 +79,7 @@ export default function ParametersCard({
 
       <div className="space-y-6">
         <p className="text-xs text-gray-500 leading-relaxed">
-          参数设置支持系统算法推荐与手动微调两种模式。AI 智能修正负责识别并处理异常拼豆，不替代系统参数推荐。
+          参数设置支持系统算法推荐与手动微调两种模式。系统推荐仅基于原图分析一次，不会随着当前图纸参数反复变化。
         </p>
 
         <div className="grid grid-cols-2 gap-2">
@@ -141,15 +141,6 @@ export default function ParametersCard({
                 ))}
               </div>
 
-              <div className="space-y-2">
-                {recommendation.reasons.map((reason) => (
-                  <div key={reason} className="border border-gray-200 bg-white px-3 py-2 text-xs leading-6 text-gray-600">
-                    <span className="font-bold text-gray-700">推荐原因：</span>
-                    {reason}
-                  </div>
-                ))}
-              </div>
-
               <button
                 type="button"
                 onClick={onApplyRecommendation}
@@ -160,7 +151,7 @@ export default function ParametersCard({
             </div>
           ) : (
             <div className="border border-dashed border-gray-300 bg-gray-50 px-4 py-4 text-xs leading-6 text-gray-500">
-              生成拼豆图纸后，这里会显示基于系统算法的推荐参数。
+              上传原图后，这里会基于原图生成一次系统算法推荐参数。
             </div>
           )
         ) : null}

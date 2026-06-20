@@ -62,6 +62,7 @@ const MIN_COLOR_COUNT = 2
 const MAX_COLOR_COUNT = 16
 const MIN_RECOMMENDED_GRID = 24
 const MAX_RECOMMENDED_GRID = 88
+const SYSTEM_RECOMMENDATION_BASE_GRID = 56
 const SIMILAR_COLOR_THRESHOLD = 5
 const SPATIAL_CLUSTER_WEIGHT = 0.03
 const EXPORT_MIME_TYPE: Record<PatternExportFormat, string> = {
@@ -365,12 +366,10 @@ export function applyPatternCellEdits(
 
 export function buildSystemPatternRecommendation(
   pattern: ProcessedPattern,
-  currentGridSize: number,
-  currentOptions: PatternProcessingOptions,
 ): PatternSystemRecommendation {
   const features = pattern.analysisFeatures
   const reasons: string[] = []
-  let recommendedGridSize = currentGridSize
+  let recommendedGridSize = pattern.width >= pattern.height ? pattern.width : pattern.height
 
   if (features.detailDensityScore >= 0.62) {
     recommendedGridSize += 8
@@ -388,33 +387,38 @@ export function buildSystemPatternRecommendation(
     reasons.push('主体贴边较明显，略微收紧网格有助于保留整体留白。')
   }
 
+  const totalCount = pattern.shoppingList.reduce((sum, item) => sum + item.count, 0)
+  const dominantColorCount = pattern.shoppingList.filter((item) => (
+    totalCount > 0 && (item.count / totalCount) >= 0.05
+  )).length
+  const mediumColorCount = pattern.shoppingList.filter((item) => (
+    totalCount > 0 && (item.count / totalCount) >= 0.025
+  )).length
+
   const recommendedTargetColorCount = clampColorCount(
-    Math.round(
-      Math.max(
-        4,
-        Math.min(
-          14,
-          features.uniqueColorCount
-          + (features.detailDensityScore > 0.58 ? 1.5 : 0)
-          - (features.dominantColorShare > 0.42 ? 1 : 0)
-          - (features.rareColorRatio > 0.14 ? 1 : 0),
+    Math.max(
+      dominantColorCount,
+      Math.min(
+        14,
+        Math.round(
+          mediumColorCount
+          + (features.detailDensityScore > 0.58 ? 1 : 0)
+          + (features.outlineColorRatio > 0.04 ? 1 : 0),
         ),
       ),
     ),
   )
 
-  if (recommendedTargetColorCount > currentOptions.targetColorCount) {
-    reasons.push('当前图案层次较多，建议增加目标配色数以保住色彩层次。')
-  } else if (recommendedTargetColorCount < currentOptions.targetColorCount) {
-    reasons.push('当前零碎色块较多，建议略微收紧配色数，让图纸更干净。')
+  if (recommendedTargetColorCount >= mediumColorCount) {
+    reasons.push('推荐配色数会优先保留占比较大的主色，避免主体颜色被误删。')
   }
 
   const recommendedOptions = normalizePatternProcessingOptions({
     targetColorCount: recommendedTargetColorCount,
-    denoise: features.detailDensityScore < 0.76,
-    mergeSimilarColors: features.uniqueColorCount >= 9 || features.dominantColorShare > 0.28,
+    denoise: features.detailDensityScore < 0.72,
+    mergeSimilarColors: features.uniqueColorCount >= 12,
     preserveDetails: features.detailDensityScore >= 0.34 || features.outlineColorRatio > 0.05,
-    cleanRareColors: features.rareColorRatio > 0.12 && features.detailDensityScore < 0.8,
+    cleanRareColors: false,
     detailProtectionLevel: features.detailDensityScore >= 0.6
       ? 'high'
       : features.detailDensityScore >= 0.38
@@ -422,11 +426,11 @@ export function buildSystemPatternRecommendation(
         : 'low',
   })
 
-  if (recommendedOptions.cleanRareColors) {
-    reasons.push('检测到稀有色占比偏高，建议启用稀有色清理。')
-  }
   if (recommendedOptions.preserveDetails) {
     reasons.push('当前图案存在边缘或高频细节，建议保留细节。')
+  }
+  if (!recommendedOptions.cleanRareColors) {
+    reasons.push('系统推荐默认不启用稀有色清理，避免误伤占比较大的有效主色。')
   }
 
   const finalGridSize = clampGridSize(recommendedGridSize)
@@ -436,6 +440,16 @@ export function buildSystemPatternRecommendation(
     summary: '根据当前图纸结构、色彩分布和细节密度生成系统算法推荐设置。',
     reasons: Array.from(new Set(reasons)).slice(0, 4),
   }
+}
+
+export async function buildSystemPatternRecommendationFromImage(imageSrc: string): Promise<PatternSystemRecommendation> {
+  const basePattern = await processImageToPattern(
+    imageSrc,
+    SYSTEM_RECOMMENDATION_BASE_GRID,
+    true,
+    DEFAULT_PATTERN_PROCESSING_OPTIONS,
+  )
+  return buildSystemPatternRecommendation(basePattern)
 }
 
 function distanceSquared(color1: Lab, color2: Lab) {
