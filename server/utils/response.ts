@@ -1,7 +1,7 @@
-import type Koa from 'koa'
+import type { Context } from 'koa'
 
 export function sendSuccess<T>(
-  ctx: Koa.Context,
+  ctx: Context,
   data: T,
   message = 'ok',
   status = 200,
@@ -16,7 +16,7 @@ export function sendSuccess<T>(
 }
 
 export function sendError(
-  ctx: Koa.Context,
+  ctx: Context,
   message: string,
   status = 500,
   code = 'INTERNAL_SERVER_ERROR',

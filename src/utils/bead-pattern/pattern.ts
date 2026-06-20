@@ -1,8 +1,10 @@
 import type {
   BeadColor,
+  PatternCellEdit,
+  PatternAnalysisFeatures,
   PatternExportFormat,
   PatternProcessingOptions,
-  PatternRecommendation,
+  PatternSystemRecommendation,
   ProcessedPattern,
   ShoppingListItem,
 } from '../../types'
@@ -45,9 +47,7 @@ type DetailTuning = {
 }
 
 export const DEFAULT_PATTERN_PROCESSING_OPTIONS: PatternProcessingOptions = {
-  mode: 'auto',
   targetColorCount: 8,
-  autoRecommendColorCount: true,
   denoise: true,
   mergeSimilarColors: true,
   preserveDetails: true,
@@ -58,21 +58,17 @@ export const DEFAULT_PATTERN_PROCESSING_OPTIONS: PatternProcessingOptions = {
 const WHITE = BASIC_BEAD_PALETTE[0]
 const PALETTE_BY_ID = new Map(BEAD_PALETTE.map((color) => [color.id, color]))
 export const BEAD_DISPLAY_SIZE = 28
-const AUTO_COLOR_COUNT_MAX = 16
+const MIN_COLOR_COUNT = 2
+const MAX_COLOR_COUNT = 16
+const MIN_RECOMMENDED_GRID = 24
+const MAX_RECOMMENDED_GRID = 88
 const SIMILAR_COLOR_THRESHOLD = 5
 const SPATIAL_CLUSTER_WEIGHT = 0.03
-const COLOR_COUNT_PENALTY = 0.035
 const EXPORT_MIME_TYPE: Record<PatternExportFormat, string> = {
   png: 'image/png',
   jpeg: 'image/jpeg',
   webp: 'image/webp',
 }
-
-// 推荐网格
-const MIN_GRID = 28
-const MAX_GRID = 72
-const DENSITY_LOW = 0.04
-const DENSITY_HIGH = 0.40
 
 const SUPERSAMPLE = 4
 
@@ -176,6 +172,7 @@ export function normalizePatternProcessingOptions(
   return {
     ...DEFAULT_PATTERN_PROCESSING_OPTIONS,
     ...options,
+    targetColorCount: clampColorCount(options.targetColorCount ?? DEFAULT_PATTERN_PROCESSING_OPTIONS.targetColorCount),
     preserveDetails: options.preserveDetails ?? DEFAULT_PATTERN_PROCESSING_OPTIONS.preserveDetails,
     cleanRareColors: options.cleanRareColors ?? DEFAULT_PATTERN_PROCESSING_OPTIONS.cleanRareColors,
     detailProtectionLevel: clampDetailProtectionLevel(options.detailProtectionLevel),
@@ -302,25 +299,56 @@ export function updatePatternCellColor(
   cellIndex: number,
   colorId: string,
 ): ProcessedPattern {
-  const color = PALETTE_BY_ID.get(colorId)
-  const currentCell = pattern.cells[cellIndex]
-  if (!color || !currentCell || currentCell.isEmpty || currentCell.colorId === colorId) {
+  return applyPatternCellEdits(pattern, [
+    {
+      x: cellIndex % pattern.width,
+      y: Math.floor(cellIndex / pattern.width),
+      colorId,
+      reason: '手动修改当前拼豆颜色。',
+    },
+  ])
+}
+
+export function applyPatternCellEdits(
+  pattern: ProcessedPattern,
+  edits: PatternCellEdit[],
+): ProcessedPattern {
+  if (edits.length === 0) {
     return pattern
   }
 
-  const [r, g, b] = hexToRgb(color.hex)
-  const cells = pattern.cells.map((cell, index) =>
-    index === cellIndex
-      ? {
-          r,
-          g,
-          b,
-          colorId: color.id,
-        }
-      : cell,
-  )
+  const cells = [...pattern.cells]
+  let changed = false
+
+  for (const edit of edits) {
+    const color = PALETTE_BY_ID.get(edit.colorId)
+    if (!color) {
+      continue
+    }
+    const x = Math.max(0, Math.min(pattern.width - 1, Math.round(edit.x)))
+    const y = Math.max(0, Math.min(pattern.height - 1, Math.round(edit.y)))
+    const cellIndex = (y * pattern.width) + x
+    const currentCell = cells[cellIndex]
+    if (!currentCell || currentCell.isEmpty || currentCell.colorId === color.id) {
+      continue
+    }
+
+    const [r, g, b] = hexToRgb(color.hex)
+    cells[cellIndex] = {
+      r,
+      g,
+      b,
+      colorId: color.id,
+    }
+    changed = true
+  }
+
+  if (!changed) {
+    return pattern
+  }
 
   const counts: Record<string, number> = {}
+  const ids = cells.map((cell) => (cell.isEmpty ? null : (cell.colorId ?? null)))
   for (const cell of cells) {
     if (!cell.isEmpty && cell.colorId) {
       counts[cell.colorId] = (counts[cell.colorId] ?? 0) + 1
@@ -331,10 +359,82 @@ export function updatePatternCellColor(
     ...pattern,
     cells,
     shoppingList: buildShoppingList(counts),
-    recommendation: {
-      ...pattern.recommendation,
-      colorCount: Object.keys(counts).length,
-    },
+    analysisFeatures: buildPatternAnalysisFeatures(ids, pattern.width, pattern.height, counts),
+  }
+}
+
+export function buildSystemPatternRecommendation(
+  pattern: ProcessedPattern,
+  currentGridSize: number,
+  currentOptions: PatternProcessingOptions,
+): PatternSystemRecommendation {
+  const features = pattern.analysisFeatures
+  const reasons: string[] = []
+  let recommendedGridSize = currentGridSize
+
+  if (features.detailDensityScore >= 0.62) {
+    recommendedGridSize += 8
+    reasons.push('当前图案细节密度偏高，建议适度加大网格以保住局部结构。')
+  } else if (features.detailDensityScore >= 0.48) {
+    recommendedGridSize += 4
+    reasons.push('图案细节较多，适合略微提高网格尺寸。')
+  } else if (features.detailDensityScore <= 0.24) {
+    recommendedGridSize -= 6
+    reasons.push('图案整体变化较平缓，可适度降低网格，减少制作复杂度。')
+  }
+
+  if (features.edgeFillRatio > 0.72) {
+    recommendedGridSize -= 2
+    reasons.push('主体贴边较明显，略微收紧网格有助于保留整体留白。')
+  }
+
+  const recommendedTargetColorCount = clampColorCount(
+    Math.round(
+      Math.max(
+        4,
+        Math.min(
+          14,
+          features.uniqueColorCount
+          + (features.detailDensityScore > 0.58 ? 1.5 : 0)
+          - (features.dominantColorShare > 0.42 ? 1 : 0)
+          - (features.rareColorRatio > 0.14 ? 1 : 0),
+        ),
+      ),
+    ),
+  )
+
+  if (recommendedTargetColorCount > currentOptions.targetColorCount) {
+    reasons.push('当前图案层次较多，建议增加目标配色数以保住色彩层次。')
+  } else if (recommendedTargetColorCount < currentOptions.targetColorCount) {
+    reasons.push('当前零碎色块较多，建议略微收紧配色数，让图纸更干净。')
+  }
+
+  const recommendedOptions = normalizePatternProcessingOptions({
+    targetColorCount: recommendedTargetColorCount,
+    denoise: features.detailDensityScore < 0.76,
+    mergeSimilarColors: features.uniqueColorCount >= 9 || features.dominantColorShare > 0.28,
+    preserveDetails: features.detailDensityScore >= 0.34 || features.outlineColorRatio > 0.05,
+    cleanRareColors: features.rareColorRatio > 0.12 && features.detailDensityScore < 0.8,
+    detailProtectionLevel: features.detailDensityScore >= 0.6
+      ? 'high'
+      : features.detailDensityScore >= 0.38
+        ? 'medium'
+        : 'low',
+  })
+
+  if (recommendedOptions.cleanRareColors) {
+    reasons.push('检测到稀有色占比偏高，建议启用稀有色清理。')
+  }
+  if (recommendedOptions.preserveDetails) {
+    reasons.push('当前图案存在边缘或高频细节，建议保留细节。')
+  }
+
+  const finalGridSize = clampGridSize(recommendedGridSize)
+  return {
+    gridSize: finalGridSize,
+    processingOptions: recommendedOptions,
+    summary: '根据当前图纸结构、色彩分布和细节密度生成系统算法推荐设置。',
+    reasons: Array.from(new Set(reasons)).slice(0, 4),
   }
 }
 
@@ -350,46 +450,6 @@ function clusterDistance(pixel: PixelSample, center: ClusterCenter) {
   const colorDistance = distanceSquared(pixel.lab, center.lab)
   const spatialDistance = ((pixel.x - center.x) ** 2) + ((pixel.y - center.y) ** 2)
   return colorDistance + (SPATIAL_CLUSTER_WEIGHT * spatialDistance)
-}
-
-/* ------------------------------------------------------------------ *
- * 推荐网格尺寸
- * ------------------------------------------------------------------ */
-function recommendGridSize(image: HTMLImageElement) {
-  const w = 128
-  const h = Math.max(1, Math.round((image.height / image.width) * w))
-  const canvas = document.createElement('canvas')
-  canvas.width = w
-  canvas.height = h
-  const ctx = canvas.getContext('2d')
-  if (!ctx) {
-    return 48
-  }
-  ctx.imageSmoothingEnabled = true
-  ctx.drawImage(image, 0, 0, w, h)
-  const { data } = ctx.getImageData(0, 0, w, h)
-
-  const gray = new Float32Array(w * h)
-  for (let i = 0; i < w * h; i += 1) {
-    const o = i * 4
-    gray[i] = (data[o] * 0.299) + (data[o + 1] * 0.587) + (data[o + 2] * 0.114)
-  }
-  let edgeCount = 0
-  let total = 0
-  for (let y = 1; y < h - 1; y += 1) {
-    for (let x = 1; x < w - 1; x += 1) {
-      const gx = gray[(y * w) + (x + 1)] - gray[(y * w) + (x - 1)]
-      const gy = gray[((y + 1) * w) + x] - gray[((y - 1) * w) + x]
-      if (Math.abs(gx) + Math.abs(gy) > 48) {
-        edgeCount += 1
-      }
-      total += 1
-    }
-  }
-  const density = total > 0 ? edgeCount / total : 0
-  const t = Math.min(1, Math.max(0, (density - DENSITY_LOW) / (DENSITY_HIGH - DENSITY_LOW)))
-  const grid = Math.round(MIN_GRID + ((MAX_GRID - MIN_GRID) * t))
-  return Math.min(MAX_GRID, Math.max(MIN_GRID, grid))
 }
 
 /* ------------------------------------------------------------------ *
@@ -590,60 +650,12 @@ function quantizePixels(pixels: PixelSample[], targetColorCount: number) {
   return { assignments, centers }
 }
 
-function computeQuantizationError(pixels: PixelSample[], assignments: number[], centers: ClusterCenter[]) {
-  if (pixels.length === 0 || centers.length === 0) {
-    return 0
-  }
-  let total = 0
-  for (let i = 0; i < pixels.length; i += 1) {
-    const center = centers[assignments[i]]
-    if (center) {
-      total += distanceSquared(pixels[i].lab, center.lab)
-    }
-  }
-  return total / pixels.length
+function clampColorCount(value: number) {
+  return Math.max(MIN_COLOR_COUNT, Math.min(MAX_COLOR_COUNT, Math.round(value)))
 }
 
-function samplePixelsForRecommendation(pixels: PixelSample[], sampleSize = 1500) {
-  if (pixels.length <= sampleSize) {
-    return pixels
-  }
-  const step = pixels.length / sampleSize
-  const sampled: PixelSample[] = []
-  for (let i = 0; i < sampleSize; i += 1) {
-    sampled.push(pixels[Math.floor(i * step)])
-  }
-  return sampled
-}
-
-function recommendColorCount(
-  pixels: PixelSample[],
-  maxCandidateCount: number,
-  options: PatternProcessingOptions,
-) {
-  const sampled = samplePixelsForRecommendation(pixels)
-  const maxCount = Math.max(2, Math.min(maxCandidateCount, sampled.length))
-  if (sampled.length < 2 || maxCount <= 2) {
-    return Math.min(2, maxCount)
-  }
-  const errors: number[] = []
-  for (let k = 2; k <= maxCount; k += 1) {
-    const { assignments, centers } = quantizePixels(sampled, k)
-    errors.push(computeQuantizationError(sampled, assignments, centers))
-  }
-  const maxError = Math.max(...errors, 1)
-  const penalty = options.preserveDetails ? COLOR_COUNT_PENALTY : COLOR_COUNT_PENALTY + 0.015
-  let bestK = 2
-  let bestCost = Number.POSITIVE_INFINITY
-  for (let i = 0; i < errors.length; i += 1) {
-    const k = i + 2
-    const cost = (errors[i] / maxError) + (penalty * k)
-    if (cost < bestCost) {
-      bestCost = cost
-      bestK = k
-    }
-  }
-  return bestK
+function clampGridSize(value: number) {
+  return Math.max(MIN_RECOMMENDED_GRID, Math.min(MAX_RECOMMENDED_GRID, Math.round(value)))
 }
 
 /* ------------------------------------------------------------------ *
@@ -907,6 +919,129 @@ function mergeRareColors(
   return ids.map((id) => (id && remap.has(id) ? remap.get(id)! : id))
 }
 
+function buildPatternAnalysisFeatures(
+  ids: (string | null)[],
+  width: number,
+  height: number,
+  counts: Record<string, number>,
+): PatternAnalysisFeatures {
+  const totalCells = width * height
+  const filledCells = ids.reduce((sum, id) => sum + (id ? 1 : 0), 0)
+  const emptyCellRatio = totalCells === 0 ? 0 : (totalCells - filledCells) / totalCells
+  const filledCellRatio = totalCells === 0 ? 0 : filledCells / totalCells
+  let edgeCells = 0
+  let edgeFilled = 0
+  let leftCount = 0
+  let rightCount = 0
+  let topCount = 0
+  let bottomCount = 0
+  let horizontalPairs = 0
+  let verticalPairs = 0
+  let horizontalTransitions = 0
+  let verticalTransitions = 0
+  let contrastTotal = 0
+  let contrastPairs = 0
+
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const idx = (y * width) + x
+      const currentId = ids[idx]
+      const isEdge = x === 0 || y === 0 || x === width - 1 || y === height - 1
+      if (isEdge) {
+        edgeCells += 1
+        if (currentId) {
+          edgeFilled += 1
+        }
+      }
+      if (!currentId) {
+        continue
+      }
+
+      if (x < width / 2) {
+        leftCount += 1
+      } else {
+        rightCount += 1
+      }
+      if (y < height / 2) {
+        topCount += 1
+      } else {
+        bottomCount += 1
+      }
+
+      if (x < width - 1) {
+        const rightId = ids[idx + 1]
+        if (rightId) {
+          horizontalPairs += 1
+          contrastTotal += colorDistanceById(currentId, rightId)
+          contrastPairs += 1
+          if (rightId !== currentId) {
+            horizontalTransitions += 1
+          }
+        }
+      }
+
+      if (y < height - 1) {
+        const bottomId = ids[idx + width]
+        if (bottomId) {
+          verticalPairs += 1
+          contrastTotal += colorDistanceById(currentId, bottomId)
+          contrastPairs += 1
+          if (bottomId !== currentId) {
+            verticalTransitions += 1
+          }
+        }
+      }
+    }
+  }
+
+  const countValues = Object.values(counts)
+  const dominantColorShare = filledCells === 0 ? 0 : (Math.max(...countValues, 0) / filledCells)
+  const rareCellCount = countValues.reduce((sum, count) => (
+    sum + ((filledCells > 0 && (count / filledCells) <= 0.03) ? count : 0)
+  ), 0)
+  const averageNeighborContrast = contrastPairs === 0 ? 0 : contrastTotal / contrastPairs
+  const horizontalTransitionRatio = horizontalPairs === 0 ? 0 : horizontalTransitions / horizontalPairs
+  const verticalTransitionRatio = verticalPairs === 0 ? 0 : verticalTransitions / verticalPairs
+  const detailDensityScore = Math.min(
+    1,
+    ((horizontalTransitionRatio + verticalTransitionRatio) / 2) + Math.min(averageNeighborContrast / 20, 0.35),
+  )
+
+  const notes: string[] = []
+  if (edgeCells > 0 && (edgeFilled / edgeCells) > 0.7) {
+    notes.push('边缘区域占用偏高，主体可能过于贴边。')
+  }
+  if (dominantColorShare > 0.45) {
+    notes.push('主导色占比偏高，颜色分布可能失衡。')
+  }
+  if (averageNeighborContrast < 3) {
+    notes.push('相邻色差偏低，图案层次可能不足。')
+  }
+  if (detailDensityScore > 0.68) {
+    notes.push('局部色块变化较密集，可能存在噪点或细节堆叠。')
+  }
+
+  return {
+    gridWidth: width,
+    gridHeight: height,
+    totalCells,
+    filledCellRatio,
+    emptyCellRatio,
+    edgeFillRatio: edgeCells === 0 ? 0 : edgeFilled / edgeCells,
+    leftRightBalanceDelta: filledCells === 0 ? 0 : Math.abs(leftCount - rightCount) / filledCells,
+    topBottomBalanceDelta: filledCells === 0 ? 0 : Math.abs(topCount - bottomCount) / filledCells,
+    dominantColorShare,
+    rareColorRatio: filledCells === 0 ? 0 : rareCellCount / filledCells,
+    uniqueColorCount: countValues.length,
+    outlineColorRatio: filledCells === 0 ? 0 : ((counts[OUTLINE_COLOR.id] ?? 0) / filledCells),
+    horizontalTransitionRatio,
+    verticalTransitionRatio,
+    averageNeighborContrast,
+    detailDensityScore,
+    notes,
+  }
+}
+
 /* ------------------------------------------------------------------ *
  * 主流程
  *
@@ -921,9 +1056,7 @@ export async function processImageToPattern(
 ): Promise<ProcessedPattern> {
   const resolvedOptions = normalizePatternProcessingOptions(options)
   const image = await loadImage(imageSrc)
-  const isAuto = resolvedOptions.mode === 'auto'
-
-  const gridSize = isAuto ? recommendGridSize(image) : requestedGridSize
+  const gridSize = requestedGridSize
   const { width, height } = getPatternDimensions(image, gridSize)
   const [whiteR, whiteG, whiteB] = hexToRgb(WHITE.hex)
 
@@ -938,7 +1071,12 @@ export async function processImageToPattern(
       height,
       cells,
       shoppingList: [],
-      recommendation: { gridSize, colorCount: 0 },
+      analysisFeatures: buildPatternAnalysisFeatures(
+        new Array(width * height).fill(null),
+        width,
+        height,
+        {},
+      ),
     }
   }
 
@@ -961,10 +1099,7 @@ export async function processImageToPattern(
   }
 
   // 彩色聚类定代表色
-  const useAutoColorCount = isAuto || resolvedOptions.autoRecommendColorCount
-  const colorCount = useAutoColorCount
-    ? recommendColorCount(colorPixels, AUTO_COLOR_COUNT_MAX, resolvedOptions)
-    : Math.max(2, Math.min(AUTO_COLOR_COUNT_MAX, Math.round(resolvedOptions.targetColorCount)))
+  const colorCount = clampColorCount(resolvedOptions.targetColorCount)
   const { assignments, centers } = quantizePixels(colorPixels, colorCount)
 
   // 每格用所属聚类中心的量化色，逐格 snap（暗色锁中性）
@@ -1018,17 +1153,12 @@ export async function processImageToPattern(
     cells.push({ r, g, b, colorId: color.id })
   }
 
-  const recommendation: PatternRecommendation = {
-    gridSize,
-    colorCount: Object.keys(counts).length,
-  }
-
   return {
     width,
     height,
     cells,
     shoppingList: buildShoppingList(counts),
-    recommendation,
+    analysisFeatures: buildPatternAnalysisFeatures(processedIds, width, height, counts),
   }
 }
 

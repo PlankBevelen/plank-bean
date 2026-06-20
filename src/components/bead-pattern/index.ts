@@ -1,3 +1,5 @@
+export { default as AiAssistantCard } from './AiAssistantCard'
+export { default as AiAssistantLauncher } from './AiAssistantLauncher'
 export { default as ParametersCard } from './ParametersCard'
 export { default as PatternCanvas } from './PatternCanvas'
 export { default as ShoppingListCard } from './ShoppingListCard'

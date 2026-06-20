@@ -14,6 +14,16 @@ export function readOptionalEnv(key: string, fallback = '') {
   return process.env[key] ?? fallback
 }
 
+export function readOptionalEnvFromKeys(keys: string[], fallback = '') {
+  for (const key of keys) {
+    const value = process.env[key]
+    if (value !== undefined && value !== '') {
+      return value
+    }
+  }
+  return fallback
+}
+
 export function readNumberEnv(key: string, fallback: number) {
   const raw = process.env[key]
   if (raw === undefined || raw === '') {

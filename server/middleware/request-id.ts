@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
-import type Koa from 'koa'
+import type { Middleware } from 'koa'
 
-export function requestIdMiddleware(): Koa.Middleware {
+export function requestIdMiddleware(): Middleware {
   return async (ctx, next) => {
     const requestId = randomUUID()
     ctx.state.requestId = requestId

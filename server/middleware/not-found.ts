@@ -1,7 +1,7 @@
-import type Koa from 'koa'
+import type { Middleware } from 'koa'
 import { sendError } from '../utils/response'
 
-export function notFoundMiddleware(): Koa.Middleware {
+export function notFoundMiddleware(): Middleware {
   return async (ctx, next) => {
     await next()
 

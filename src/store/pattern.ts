@@ -2,11 +2,14 @@ import { create } from 'zustand'
 import { createJSONStorage, persist } from 'zustand/middleware'
 import type { StateStorage } from 'zustand/middleware'
 import type {
+  PatternCellEdit,
   PatternExportFormat,
+  PatternParameterPatch,
   PatternProcessingOptions,
   ProcessedPattern,
 } from '../types'
 import {
+  applyPatternCellEdits,
   DEFAULT_PATTERN_PROCESSING_OPTIONS,
   normalizePatternProcessingOptions,
   updatePatternCellColor,
@@ -38,6 +41,8 @@ type PatternStoreActions = {
   setImageSrc: (imageSrc: string | null) => void
   setGridSize: (gridSize: number) => void
   updateProcessingOptions: (patch: Partial<PatternProcessingOptions>) => void
+  applyParameterPatch: (patch: PatternParameterPatch) => void
+  applyPatternCellEdits: (edits: PatternCellEdit[]) => void
   setPattern: (pattern: ProcessedPattern | null) => void
   updatePatternCell: (cellIndex: number, colorId: string) => void
   setIsProcessing: (isProcessing: boolean) => void
@@ -105,6 +110,24 @@ export const usePatternStore = create<PatternStore>()(
             ...patch,
           }),
         }))
+      },
+      applyParameterPatch(patch) {
+        set((currentState) => ({
+          gridSize: patch.gridSize ?? currentState.gridSize,
+          processingOptions: normalizePatternProcessingOptions({
+            ...currentState.processingOptions,
+            ...patch.processingOptions,
+          }),
+        }))
+      },
+      applyPatternCellEdits(edits) {
+        const currentPattern = get().pattern
+        if (!currentPattern || edits.length === 0) {
+          return
+        }
+        set({
+          pattern: applyPatternCellEdits(currentPattern, edits),
+        })
       },
       setPattern(pattern) {
         set({ pattern })

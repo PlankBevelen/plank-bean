@@ -1,8 +1,8 @@
-import type Koa from 'koa'
+import type { Middleware } from 'koa'
 import { logger } from '../utils/logger'
 import { sendError } from '../utils/response'
 
-export function errorHandlerMiddleware(): Koa.Middleware {
+export function errorHandlerMiddleware(): Middleware {
   return async (ctx, next) => {
     try {
       await next()

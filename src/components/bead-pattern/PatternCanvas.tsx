@@ -1,4 +1,6 @@
-import type { ShoppingListItem } from '../../types'
+import { useMemo, useState } from 'react'
+import type { BeadColor, ShoppingListItem } from '../../types'
+import { BEAD_PALETTE } from '../../utils'
 import { ExpandIcon, ImageIcon, PencilIcon, ShrinkIcon } from '../common/Icons'
 
 type PatternCanvasProps = {
@@ -30,13 +32,25 @@ export default function PatternCanvas({
   onCanvasClick,
   onSelectColor,
 }: PatternCanvasProps) {
-  const selectedColor = shoppingList.find((item) => item.color.id === selectedColorId)?.color ?? null
+  const [isAllColorsOpen, setIsAllColorsOpen] = useState(false)
+  const selectedColor = useMemo(
+    () => BEAD_PALETTE.find((item) => item.id === selectedColorId) ?? null,
+    [selectedColorId],
+  )
+  const shoppingColorIds = useMemo(
+    () => new Set(shoppingList.map((item) => item.color.id)),
+    [shoppingList],
+  )
+  const extraColors = useMemo<BeadColor[]>(
+    () => BEAD_PALETTE.filter((item) => !shoppingColorIds.has(item.id)),
+    [shoppingColorIds],
+  )
 
   return (
     <div
       className={isFullscreen
         ? 'fixed inset-0 z-50 flex h-screen flex-col bg-[color:var(--background)] text-[color:var(--foreground)]'
-        : 'bg-white border-[1.5px] border-[#14130F] shadow-[4px_4px_0_#14130F] rounded-none'}
+        : 'relative bg-white border-[1.5px] border-[#14130F] shadow-[4px_4px_0_#14130F] rounded-none'}
     >
       <div
         className={isFullscreen
@@ -52,7 +66,7 @@ export default function PatternCanvas({
           >
             {isEditMode
               ? '修改模式已开启，先在底部选择豆色，再点击画布上的目标拼豆完成替换。'
-              : '展示经过分析处理后的拼豆结果，可在全屏下进入修改模式。'}
+              : '展示经过分析处理后的拼豆结果，可直接进入修改模式调整拼豆。'}
           </p>
         </div>
 
@@ -132,22 +146,29 @@ export default function PatternCanvas({
               <div className="font-mono font-bold text-[#1F4BFF] animate-pulse">处理中...</div>
             </div>
           )}
+
         </div>
       </div>
 
-      {isFullscreen && isEditMode && shoppingList.length > 0 ? (
-        <div className="border-t border-[color:var(--border)] bg-[color:var(--background)]/95 px-4 py-3 backdrop-blur">
+      {isEditMode && shoppingList.length > 0 ? (
+        <div className={isFullscreen
+          ? 'border-t border-[color:var(--border)] bg-[color:var(--background)]/95 px-4 py-3 backdrop-blur'
+          : 'border-t border-gray-200 bg-gray-50 px-4 py-3'}
+        >
           <div className="mb-3 flex items-center justify-between gap-4">
             <div>
               <p className="text-sm font-bold">底部配色清单</p>
-              <p className="text-xs text-[color:var(--muted-foreground)]">
+              <p className={isFullscreen ? 'text-xs text-[color:var(--muted-foreground)]' : 'text-xs text-gray-500'}>
                 选择一种拼豆后，直接点击画布上的目标位置即可替换。
               </p>
             </div>
             <div className="flex items-center gap-2 text-sm font-mono">
-              <span className="text-[color:var(--muted-foreground)]">当前选择</span>
+              <span className={isFullscreen ? 'text-[color:var(--muted-foreground)]' : 'text-gray-500'}>当前选择</span>
               {selectedColor ? (
-                <span className="inline-flex items-center gap-2 border border-[color:var(--border)] bg-[color:var(--card)] px-2 py-1">
+                <span className={isFullscreen
+                  ? 'inline-flex items-center gap-2 border border-[color:var(--border)] bg-[color:var(--card)] px-2 py-1'
+                  : 'inline-flex items-center gap-2 border border-gray-200 bg-white px-2 py-1'}
+                >
                   <span
                     className="h-4 w-4 border border-[#14130F]"
                     style={{ backgroundColor: selectedColor.hex }}
@@ -187,7 +208,63 @@ export default function PatternCanvas({
                 </button>
               )
             })}
+            <button
+              type="button"
+              onClick={() => setIsAllColorsOpen((current) => !current)}
+              className={`flex min-w-[148px] items-center justify-center border px-3 py-2 text-sm font-bold transition-colors ${
+                isAllColorsOpen
+                  ? 'border-[#14130F] bg-[#1F4BFF] text-white'
+                  : isFullscreen
+                    ? 'border-[color:var(--border)] bg-[color:var(--card)] hover:bg-[color:var(--accent)]'
+                    : 'border-gray-200 bg-white text-gray-700 hover:border-gray-400'
+              }`}
+            >
+              {isAllColorsOpen ? '收起更多颜色' : '更多颜色'}
+            </button>
           </div>
+
+          {isAllColorsOpen ? (
+            <div className={isFullscreen ? 'mt-4 border-t border-[color:var(--border)] pt-4' : 'mt-4 border-t border-gray-200 pt-4'}>
+              <div className="mb-3">
+                <p className="text-sm font-bold">全部颜色</p>
+                <p className={isFullscreen ? 'text-xs text-[color:var(--muted-foreground)]' : 'text-xs text-gray-500'}>
+                  可从完整拼豆色板中直接选择，不受当前购物清单限制。
+                </p>
+              </div>
+              <div className="pattern-scrollbar max-h-56 overflow-y-auto pr-1">
+                <div className="grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-4">
+                  {extraColors.map((color) => {
+                    const isSelected = color.id === selectedColorId
+                    return (
+                      <button
+                        key={color.id}
+                        type="button"
+                        onClick={() => onSelectColor(color.id)}
+                        className={`flex items-center gap-3 border px-3 py-2 text-left transition-colors ${
+                          isSelected
+                            ? 'border-[#14130F] bg-[#1F4BFF] text-white'
+                            : isFullscreen
+                              ? 'border-[color:var(--border)] bg-[color:var(--card)] hover:bg-[color:var(--accent)]'
+                              : 'border-gray-200 bg-white text-gray-700 hover:border-gray-400'
+                        }`}
+                      >
+                        <span
+                          className="h-7 w-7 shrink-0 border-[1.5px] border-[#14130F]"
+                          style={{ backgroundColor: color.hex }}
+                        />
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-sm font-bold">{color.name}</span>
+                          <span className={`block text-xs font-mono ${isSelected ? 'text-white/80' : isFullscreen ? 'text-[color:var(--muted-foreground)]' : 'text-gray-500'}`}>
+                            {color.id}
+                          </span>
+                        </span>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>
